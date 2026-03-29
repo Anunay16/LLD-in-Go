@@ -1,5 +1,9 @@
 package types
 
+import (
+	"time"
+)
+
 type INotification interface {
 	GetContent() string
 }
@@ -28,4 +32,22 @@ type IObservable interface {
 
 type IObserver interface {
 	Update(notification INotification)
+}
+
+// ============ History =================
+
+type NotificationStatus string
+
+const (
+	Scheduled NotificationStatus = "SCHEDULED"
+	Sent      NotificationStatus = "SENT"
+	Failed    NotificationStatus = "FAILED"
+)
+
+type NotificationHistory struct {
+	Id           string
+	Notification INotification
+	Status       NotificationStatus
+	CreatedAt    time.Time
+	SentAt       *time.Time
 }

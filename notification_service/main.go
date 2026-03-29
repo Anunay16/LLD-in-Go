@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	notificationservice "notification-service/notification_service"
 	types "notification-service/types"
 	"time"
@@ -20,5 +21,10 @@ func main() {
 
 	notification2 := types.NewSimpleNotification("Instant notification")
 	service.SendNotification(notification2)
-	time.Sleep(6 * time.Second)
+	time.Sleep(5 * time.Second)
+
+	history := service.GetHistory()
+	for _, h := range history {
+		fmt.Println(h)
+	}
 }

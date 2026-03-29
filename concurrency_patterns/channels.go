@@ -4,7 +4,7 @@ import "fmt"
 
 func main() {
 	myChannel := make(chan string)
-	
+
 	go func() {
 		myChannel <- "first"
 		myChannel <- "second"

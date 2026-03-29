@@ -2,6 +2,12 @@ package repository
 
 import "notification-service/types"
 
+/*
+TODO: This NotificationObservableReposiory should be an interface which would be imported by
+the client
+
+The concretions can be: InMemoryStorage and DB
+*/
 type NotificationObservableReposiory struct {
 	observers []types.IObserver
 }
