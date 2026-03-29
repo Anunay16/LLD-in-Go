@@ -1,8 +1,9 @@
 package main
 
 import (
-	types "notification-service/types"
 	notificationservice "notification-service/notification_service"
+	types "notification-service/types"
+	"time"
 )
 
 func main() {
@@ -13,7 +14,11 @@ func main() {
 	notificationEngine.AddStrategy(notificationservice.NewEmailStrategy("abc@gmail.com"))
 	notificationEngine.AddStrategy(notificationservice.NewSMSStrategy("9163167900"))
 
-	notification := types.NewSimpleNotification("Your order has been shipped")
+	notification1 := types.NewSimpleNotification("Worker notification")
+	scheduleTime := time.Now().Add(3 * time.Second)
+	service.ScheduleNotification(notification1, scheduleTime)
 
-	service.SendNotification(notification)
+	notification2 := types.NewSimpleNotification("Instant notification")
+	service.SendNotification(notification2)
+	time.Sleep(6 * time.Second)
 }
