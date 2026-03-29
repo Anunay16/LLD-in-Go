@@ -1,12 +1,13 @@
-package bankingsystem
+package bankingsystem_test
 
 import (
+	bankingsystem "banking_system/functional"
 	"reflect"
 	"testing"
 )
 
 func TestCreateAccount(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	// Create new account
 	if !b.CreateAccount(1, "A") {
@@ -20,7 +21,7 @@ func TestCreateAccount(t *testing.T) {
 }
 
 func TestDeposit(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	// Deposit to non-existing account
 	if res := b.Deposit(1, "A", 100); res != nil {
@@ -43,7 +44,7 @@ func TestDeposit(t *testing.T) {
 }
 
 func TestTransfer(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	b.CreateAccount(1, "A")
 	b.CreateAccount(1, "B")
@@ -57,8 +58,8 @@ func TestTransfer(t *testing.T) {
 	}
 
 	// Check balances
-	if b.accounts["B"].balance != 100 {
-		t.Errorf("expected target balance 100, got %d", b.accounts["B"].balance)
+	if b.Accounts["B"].Balance != 100 {
+		t.Errorf("expected target balance 100, got %d", b.Accounts["B"].Balance)
 	}
 
 	// Insufficient funds
@@ -81,7 +82,7 @@ func TestTransfer(t *testing.T) {
 }
 
 func TestTopSpenders(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	b.CreateAccount(1, "A")
 	b.CreateAccount(1, "B")
@@ -116,7 +117,7 @@ func TestTopSpenders(t *testing.T) {
 }
 
 func TestTopSpenders_Tie(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	b.CreateAccount(1, "A")
 	b.CreateAccount(1, "B")
@@ -140,7 +141,7 @@ func TestTopSpenders_Tie(t *testing.T) {
 
 func TestSchedulePayment(t *testing.T) {
 	t.Run("Test_SchedulePayment_Order", func(t *testing.T) {
-		b := NewBankingSystemImpl()
+		b := bankingsystem.NewBankingSystemImpl()
 
 		b.CreateAccount(1, "A")
 		b.Deposit(2, "A", 100)
@@ -153,13 +154,13 @@ func TestSchedulePayment(t *testing.T) {
 		// payment1 succeeds → balance 40
 		// payment2 fails (insufficient funds)
 
-		if b.accounts["A"].balance != 40 {
-			t.Fatalf("expected 40, got %d", b.accounts["A"].balance)
+		if b.Accounts["A"].Balance != 40 {
+			t.Fatalf("expected 40, got %d", b.Accounts["A"].Balance)
 		}
 	})
 
 	t.Run("Test_SchedulePayment_BasicExecution", func(t *testing.T) {
-		b := NewBankingSystemImpl()
+		b := bankingsystem.NewBankingSystemImpl()
 
 		b.CreateAccount(1, "A")
 		b.Deposit(2, "A", 100)
@@ -172,13 +173,13 @@ func TestSchedulePayment(t *testing.T) {
 		// Trigger execution
 		b.Deposit(5, "A", 0)
 
-		if b.accounts["A"].balance != 50 {
-			t.Fatalf("expected balance 50, got %d", b.accounts["A"].balance)
+		if b.Accounts["A"].Balance != 50 {
+			t.Fatalf("expected balance 50, got %d", b.Accounts["A"].Balance)
 		}
 	})
 
 	t.Run("Test_SchedulePayment_InsufficientFunds", func(t *testing.T) {
-		b := NewBankingSystemImpl()
+		b := bankingsystem.NewBankingSystemImpl()
 
 		b.CreateAccount(1, "A")
 		b.Deposit(2, "A", 30)
@@ -187,13 +188,13 @@ func TestSchedulePayment(t *testing.T) {
 
 		b.Deposit(5, "A", 0)
 
-		if b.accounts["A"].balance != 30 {
+		if b.Accounts["A"].Balance != 30 {
 			t.Fatalf("payment should be skipped")
 		}
 	})
 
 	t.Run("Test_CancelPayment_Success", func(t *testing.T) {
-		b := NewBankingSystemImpl()
+		b := bankingsystem.NewBankingSystemImpl()
 
 		b.CreateAccount(1, "A")
 		b.Deposit(2, "A", 100)
@@ -207,13 +208,13 @@ func TestSchedulePayment(t *testing.T) {
 
 		b.Deposit(5, "A", 0)
 
-		if b.accounts["A"].balance != 100 {
+		if b.Accounts["A"].Balance != 100 {
 			t.Fatalf("payment should not execute")
 		}
 	})
 
 	t.Run("Test_CancelPayment_AfterExecution", func(t *testing.T) {
-		b := NewBankingSystemImpl()
+		b := bankingsystem.NewBankingSystemImpl()
 
 		b.CreateAccount(1, "A")
 		b.Deposit(2, "A", 100)
@@ -227,13 +228,13 @@ func TestSchedulePayment(t *testing.T) {
 			t.Fatalf("cancel should fail after execution")
 		}
 
-		if b.accounts["A"].balance != 50 {
+		if b.Accounts["A"].Balance != 50 {
 			t.Fatalf("payment should already be deducted")
 		}
 	})
 
 	t.Run("Test_CancelPayment_WrongAccount", func(t *testing.T) {
-		b := NewBankingSystemImpl()
+		b := bankingsystem.NewBankingSystemImpl()
 
 		b.CreateAccount(1, "A")
 		b.CreateAccount(1, "B")
@@ -249,7 +250,7 @@ func TestSchedulePayment(t *testing.T) {
 	})
 
 	t.Run("Test_CancelPayment_NotFound", func(t *testing.T) {
-		b := NewBankingSystemImpl()
+		b := bankingsystem.NewBankingSystemImpl()
 
 		b.CreateAccount(1, "A")
 
@@ -260,7 +261,7 @@ func TestSchedulePayment(t *testing.T) {
 	})
 
 	t.Run("Test_TopSpenders_WithScheduledPayments", func(t *testing.T) {
-		b := NewBankingSystemImpl()
+		b := bankingsystem.NewBankingSystemImpl()
 
 		b.CreateAccount(1, "A")
 		b.CreateAccount(1, "B")
@@ -285,7 +286,7 @@ func TestSchedulePayment(t *testing.T) {
 	})
 
 	t.Run("Test_Order_ScheduledBeforeTransfer", func(t *testing.T) {
-		b := NewBankingSystemImpl()
+		b := bankingsystem.NewBankingSystemImpl()
 
 		b.CreateAccount(1, "A")
 		b.CreateAccount(1, "B")
@@ -305,7 +306,7 @@ func TestSchedulePayment(t *testing.T) {
 }
 
 func Test_Complex_Interleaving(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	b.CreateAccount(1, "A")
 	b.CreateAccount(1, "B")
@@ -319,17 +320,17 @@ func Test_Complex_Interleaving(t *testing.T) {
 
 	// payment executes → A: 150 - 100 = 50
 
-	if b.accounts["A"].balance != 50 {
-		t.Fatalf("expected 50, got %d", b.accounts["A"].balance)
+	if b.Accounts["A"].Balance != 50 {
+		t.Fatalf("expected 50, got %d", b.Accounts["A"].Balance)
 	}
 
-	if b.accounts["B"].balance != 50 {
+	if b.Accounts["B"].Balance != 50 {
 		t.Fatalf("expected B = 50")
 	}
 }
 
 func Test_MultiAccount_HeavyFlow(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	b.CreateAccount(1, "A")
 	b.CreateAccount(1, "B")
@@ -364,7 +365,7 @@ func Test_MultiAccount_HeavyFlow(t *testing.T) {
 }
 
 func Test_SameTimestamp_Ordering(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	b.CreateAccount(1, "A")
 	b.CreateAccount(1, "B")
@@ -383,7 +384,7 @@ func Test_SameTimestamp_Ordering(t *testing.T) {
 }
 
 func Test_Cancel_Reschedule(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	b.CreateAccount(1, "A")
 	b.Deposit(2, "A", 200)
@@ -396,13 +397,13 @@ func Test_Cancel_Reschedule(t *testing.T) {
 
 	b.Deposit(5, "A", 0)
 
-	if b.accounts["A"].balance != 150 {
-		t.Fatalf("expected 150 got %d", b.accounts["A"].balance)
+	if b.Accounts["A"].Balance != 150 {
+		t.Fatalf("expected 150 got %d", b.Accounts["A"].Balance)
 	}
 }
 
 func Test_PartialExecutionChain(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	b.CreateAccount(1, "A")
 	b.Deposit(2, "A", 120)
@@ -417,13 +418,13 @@ func Test_PartialExecutionChain(t *testing.T) {
 	// payment2 → 20
 	// payment3 → FAIL
 
-	if b.accounts["A"].balance != 20 {
-		t.Fatalf("expected 20 got %d", b.accounts["A"].balance)
+	if b.Accounts["A"].Balance != 20 {
+		t.Fatalf("expected 20 got %d", b.Accounts["A"].Balance)
 	}
 }
 
 func Test_Cancel_JustBeforeExecution(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	b.CreateAccount(1, "A")
 	b.Deposit(2, "A", 100)
@@ -437,13 +438,13 @@ func Test_Cancel_JustBeforeExecution(t *testing.T) {
 
 	b.Deposit(5, "A", 0)
 
-	if b.accounts["A"].balance != 100 {
+	if b.Accounts["A"].Balance != 100 {
 		t.Fatalf("payment should not execute")
 	}
 }
 
 func Test_Cancel_AtSameTimestamp(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	b.CreateAccount(1, "A")
 	b.Deposit(2, "A", 100)
@@ -457,13 +458,13 @@ func Test_Cancel_AtSameTimestamp(t *testing.T) {
 		t.Fatalf("cancel should fail")
 	}
 
-	if b.accounts["A"].balance != 50 {
+	if b.Accounts["A"].Balance != 50 {
 		t.Fatalf("payment should have executed")
 	}
 }
 
 func Test_HeavyScenario(t *testing.T) {
-	b := NewBankingSystemImpl()
+	b := bankingsystem.NewBankingSystemImpl()
 
 	b.CreateAccount(1, "A")
 	b.CreateAccount(1, "B")
@@ -483,8 +484,8 @@ func Test_HeavyScenario(t *testing.T) {
 	b.Deposit(6, "A", 0)
 	// payment(200) executes → A= -100? NO → should fail (insufficient)
 
-	if b.accounts["A"].balance != 100 {
-		t.Fatalf("expected 100 got %d", b.accounts["A"].balance)
+	if b.Accounts["A"].Balance != 100 {
+		t.Fatalf("expected 100 got %d", b.Accounts["A"].Balance)
 	}
 
 	res := b.TopSpenders(7, 2)

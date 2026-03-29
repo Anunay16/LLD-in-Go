@@ -20,7 +20,7 @@ type Payment struct {
 }
 
 type BankingSystemImpl struct {
-	accounts             map[string]*Account
+	Accounts             map[string]*Account
 	paymentTimestamps    map[int][]*Payment
 	paymentIdToPayment   map[string]*Payment
 	paymentOrdinalNumber int
@@ -28,7 +28,7 @@ type BankingSystemImpl struct {
 
 func NewBankingSystemImpl() *BankingSystemImpl {
 	BankingSystem := BankingSystemImpl{
-		accounts:             make(map[string]*Account),
+		Accounts:             make(map[string]*Account),
 		paymentTimestamps:    make(map[int][]*Payment),
 		paymentIdToPayment:   make(map[string]*Payment),
 		paymentOrdinalNumber: 1,
@@ -38,7 +38,7 @@ func NewBankingSystemImpl() *BankingSystemImpl {
 
 func (b *BankingSystemImpl) CreateAccount(timestamp int, accountId string) bool {
 	b.allSmallerTransac(timestamp)
-	_, exists := b.accounts[accountId]
+	_, exists := b.Accounts[accountId]
 	if exists {
 		return false
 	}
@@ -47,13 +47,13 @@ func (b *BankingSystemImpl) CreateAccount(timestamp int, accountId string) bool 
 		balance:        0,
 		outgoingAmount: 0,
 	}
-	b.accounts[accountId] = newAccount
+	b.Accounts[accountId] = newAccount
 	return true
 }
 
 func (b *BankingSystemImpl) Deposit(timestamp int, accountId string, amountToAdd int) *int {
 	b.allSmallerTransac(timestamp)
-	account, exists := b.accounts[accountId]
+	account, exists := b.Accounts[accountId]
 	if !exists {
 		return nil
 	}
@@ -75,7 +75,7 @@ func (b *BankingSystemImpl) PerformTransaction(timestamp int) {
 			continue
 		}
 		accountId := payment.sender
-		account, exists := b.accounts[accountId]
+		account, exists := b.Accounts[accountId]
 		if !exists {
 			continue
 		}
@@ -92,11 +92,11 @@ func (b *BankingSystemImpl) Transfer(timestamp int, sourceAccountId string, targ
 	if sourceAccountId == targetAccountId {
 		return nil
 	}
-	source, exists := b.accounts[sourceAccountId]
+	source, exists := b.Accounts[sourceAccountId]
 	if !exists {
 		return nil
 	}
-	target, exists := b.accounts[targetAccountId]
+	target, exists := b.Accounts[targetAccountId]
 	if !exists {
 		return nil
 	}
@@ -119,7 +119,7 @@ type Pair struct {
 func (b *BankingSystemImpl) TopSpenders(timestamp int, n int) []string {
 	b.allSmallerTransac(timestamp)
 	topSpenderPairs := []*Pair{}
-	for k, v := range b.accounts {
+	for k, v := range b.Accounts {
 		topSpenderPairs = append(topSpenderPairs, &Pair{
 			accountId:      k,
 			outgoingAmount: v.outgoingAmount,
@@ -141,7 +141,7 @@ func (b *BankingSystemImpl) TopSpenders(timestamp int, n int) []string {
 
 func (b *BankingSystemImpl) SchedulePayment(timestamp int, accountId string, amountToPay int, delay int) *string {
 	b.allSmallerTransac(timestamp)
-	account, exists := b.accounts[accountId]
+	account, exists := b.Accounts[accountId]
 	if !exists {
 		return nil
 	}
