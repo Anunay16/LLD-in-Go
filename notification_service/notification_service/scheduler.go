@@ -78,6 +78,22 @@ func (s *Scheduler) Schedule(executeAt time.Time, f func()) {
 }
 
 func (s *Scheduler) run() {
+	/*
+	   LOOP:
+	     lock
+	     if no work → unlock + wait
+	     peek next task
+	     compute wait time
+	     unlock
+	     wait OR get interrupted
+	     lock again
+	     re-check state
+	     execute task
+
+	   	“Worker sleeps until there’s work or time arrives.
+	   	Before sleeping, it leaves the key (lock).
+	   	When it wakes up, it checks if work still exists.”
+	*/
 	for {
 		s.mu.Lock()
 
@@ -96,6 +112,7 @@ func (s *Scheduler) run() {
 		now := time.Now()
 		wait := nextTask.executeAt.Sub(now)
 
+		// Never hold a lock while waiting
 		s.mu.Unlock()
 
 		if wait > 0 {
