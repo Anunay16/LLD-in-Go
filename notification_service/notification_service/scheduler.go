@@ -52,7 +52,7 @@ func NewScheduler() *Scheduler {
 	s := &Scheduler{
 		pq:   make(PriorityQueue, 0),
 		wake: make(chan struct{}, 1),
-		stop: make(chan struct{}, 0),
+		stop: make(chan struct{}),
 	}
 	heap.Init(&s.pq)
 	go s.run()
