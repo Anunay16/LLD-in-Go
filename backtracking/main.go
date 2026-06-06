@@ -6,6 +6,8 @@ import (
 )
 
 func main() {
-	permutations := permutations.Permutations([]int{1, 2, 3})
-	fmt.Println(permutations)
+	permutations1 := permutations.Permutations([]int{1, 2, 1})
+	permutations2 := permutations.PermutationsWithDup([]int{1, 2, 1})
+	fmt.Println(permutations1)
+	fmt.Println(permutations2)
 }
