@@ -1,0 +1,18 @@
+# Mac OS
+.DS_Store
+
+# Go binaries and coverage outputs
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+cover.out
+
+# IDEs & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
