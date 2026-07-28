@@ -76,3 +76,16 @@ func (d *Driver) IsAvailable() bool {
 	defer d.mu.RUnlock()
 	return d.Status == DriverStatusAvailable
 }
+
+// TryAssignToTrip atomically checks if the driver is AVAILABLE and sets their status to ON_TRIP.
+// Returns true if assignment succeeded, or false if the driver was taken concurrently.
+func (d *Driver) TryAssignToTrip() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.Status != DriverStatusAvailable {
+		return false
+	}
+	d.Status = DriverStatusOnTrip
+	return true
+}

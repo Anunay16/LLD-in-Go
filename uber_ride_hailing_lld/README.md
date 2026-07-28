@@ -19,7 +19,7 @@ A clean, production-ready, extensible Low-Level Design (LLD) implementation of a
      - `NearestDriverStrategy`: Picks the closest available driver matching vehicle type.
      - `HighestRatedDriverStrategy`: Picks the highest-rated available driver.
 
-4. **Dynamic Fare Calculation Engine (Strategy Pattern)**:
+4. **Dynamic Fare Calculation Engine (Strategy & Decorator Patterns)**:
    - Dynamic fare pricing based on distance, duration, and vehicle type:
      - `StandardPricingStrategy`: Base rate + per-KM rate + per-minute rate.
      - `SurgePricingStrategy`: Wraps standard strategy with demand multiplier (e.g., `1.5x`).
@@ -36,8 +36,81 @@ A clean, production-ready, extensible Low-Level Design (LLD) implementation of a
 7. **Concurrency & Thread Safety**:
    - Mutex synchronization (`sync.RWMutex`) to guarantee thread-safe operations and prevent double-booking of drivers when concurrent requests arrive.
 
-8. **Unified API Facade (Facade Pattern)**:
-   - `RideHailingManager` encapsulates internal services into simple high-level API methods.
+> [!IMPORTANT]
+> **Double-Booking Prevention (Atomic Check-and-Set)**:
+> To prevent **Time-of-Check to Time-of-Use (TOCTOU)** race conditions when concurrent trip requests target the same available driver, `Driver.TryAssignToTrip()` performs an atomic check-and-set operation under a single mutex lock. If two threads attempt to assign the same driver simultaneously, only one succeeds (`Status = ON_TRIP`), while the second receives `false` and fails safely.
+
+8. **Unified API Facade & Dependency Injection**:
+   - `RideHailingManager` encapsulates internal services into simple high-level API methods, with all service dependencies injected via interfaces from `main.go`.
+
+---
+
+## 🧩 LLD Design Patterns Used & Rationale
+
+The project leverages several key Low-Level Software Design Patterns to ensure loose coupling, high extensibility, and strict adherence to SOLID principles:
+
+### 1. **Strategy Pattern**
+- **Where Used**:
+  - **Matching Strategies**: `MatchingStrategy` interface implemented by `NearestDriverStrategy` and `HighestRatedDriverStrategy`.
+  - **Pricing Strategies**: `PricingStrategy` interface implemented by `StandardPricingStrategy` and `SurgePricingStrategy`.
+  - **Payment Strategies**: `PaymentStrategy` interface implemented by `CashPaymentStrategy`, `CreditCardPaymentStrategy`, and `WalletPaymentStrategy`.
+- **Why Used**:
+  - Encapsulates interchangeable algorithms (matching algorithms, pricing rules, payment processing) behind uniform interfaces.
+  - Allows switching strategies dynamically at runtime (e.g., changing from nearest driver to highest-rated driver, or standard fare to surge pricing) without altering client services like `TripService` or `RideHailingManager`.
+  - Adheres strictly to the **Open/Closed Principle (OCP)**: new matching rules or payment methods can be added by introducing a new struct implementing the interface without modifying existing code.
+
+---
+
+### 2. **Decorator Pattern**
+- **Where Used**:
+  - `SurgePricingStrategy` wraps an underlying `PricingStrategy` (e.g., `StandardPricingStrategy`).
+- **Why Used**:
+  - Enables adding responsibilities (demand surge multiplier) to pricing calculations dynamically without modifying or duplicating the underlying base fare strategy.
+  - Allows nesting pricing behavior cleanly (e.g., wrapping standard fare calculation with multiplier logic).
+
+---
+
+### 3. **Observer Pattern (Publish-Subscribe)**
+- **Interfaces & Struct Implementations**:
+  - **`Subject` Interface** (`RegisterObserver`, `RemoveObserver`, `NotifyObservers`):
+    - **Implemented by**: `NotificationPublisher` struct.
+    - **Why**: Serves as the central event hub/publisher. It maintains a thread-safe list (`sync.RWMutex`) of subscribed observers and broadcasts trip state changes without depending on specific concrete notification channels.
+  - **`Observer` Interface** (`OnTripStatusChanged`):
+    - **Implemented by**: `ConsoleNotificationObserver` struct (instantiated for listeners like `"RIDER_APP"` and `"DRIVER_APP"`).
+    - **Why**: Represents a subscriber/listener for trip lifecycle events. When notified by the publisher, it handles event processing (e.g., formatting and outputting real-time notifications).
+- **Why Used**:
+  - Decouples core trip domain execution (`TripService`) from event notifications (rider/driver app push notifications, SMS, logging).
+  - When trip statuses change (`REQUESTED` ➔ `ACCEPTED` ➔ `IN_PROGRESS` ➔ `COMPLETED`), the publisher broadcasts updates to all registered listeners automatically.
+  - New notification targets (e.g., Analytics, Email, Audit Loggers) can be registered at runtime by simply implementing `Observer` without altering `TripService` or `NotificationPublisher`.
+
+---
+
+### 4. **Facade Pattern**
+- **Where Used**:
+  - `RideHailingManager` struct in `internal/manager`.
+- **Why Used**:
+  - Acts as a unified entry point (Facade) for client code (`main.go`), shielding clients from the complexity of interacting with multiple underlying micro-services (`UserService`, `MatchingService`, `PricingService`, `LocationService`, `TripService`).
+  - Simplifies high-level user actions like `BookRide`, `StartRide`, `CompleteRide`, `RegisterRider`, and `RegisterDriver`.
+
+---
+
+### 5. **Dependency Injection (DI) & Dependency Inversion Principle (DIP)**
+- **Where Used**:
+  - Service & Event Publisher interfaces (`UserService`, `MatchingService`, `PricingService`, `LocationService`, `TripService`, and `observer.Subject`).
+  - Constructor injection in `RideHailingManager` and `TripService`.
+  - Service instantiation and dependency wiring in `main.go`.
+- **Why Used**:
+  - High-level modules (`RideHailingManager`, `TripService`) depend on abstract service and event publisher interfaces rather than concrete implementations (`*NotificationPublisher`).
+  - Dependencies are explicitly constructed and injected from `main.go`, eliminating hardcoded tight coupling inside constructors.
+  - Improves testability, modularity, and allows mock services or alternate event publishers (e.g., Kafka/RabbitMQ publishers) to be injected seamlessly.
+
+---
+
+### 6. **Factory / Constructor Pattern (Idiomatic Go)**
+- **Where Used**:
+  - Constructor functions across packages: `NewUserService()`, `NewMatchingService(...)`, `NewPricingService(...)`, `NewTripService(...)`, `NewRideHailingManager(...)`, `NewRider(...)`, `NewDriver(...)`, etc.
+- **Why Used**:
+  - Encapsulates object creation logic, ensuring internal maps, mutexes, default statuses, and nested structs are properly initialized before usage.
 
 ---
 
@@ -134,31 +207,29 @@ classDiagram
 uber_ride_hailing_lld/
 ├── go.mod
 ├── README.md
-├── main.go                     # Interactive simulation demo
-├── internal/                   # Idiomatic Go internal package encapsulation
-│   ├── models/                 # Core domain entities & enums
-│   │   ├── enums.go
-│   │   ├── location.go
-│   │   ├── user.go
-│   │   ├── vehicle.go
-│   │   ├── trip.go
-│   │   └── payment.go
-│   ├── strategy/               # Strategy Pattern implementations
-│   │   ├── matching_strategy.go
-│   │   ├── pricing_strategy.go
-│   │   └── payment_strategy.go
-│   ├── observer/               # Observer Pattern implementation
-│   │   └── notification.go
-│   ├── services/               # Core business services
-│   │   ├── location_service.go
-│   │   ├── user_service.go
-│   │   ├── pricing_service.go
-│   │   ├── matching_service.go
-│   │   └── trip_service.go
-│   └── manager/                # Facade Manager
-│       └── ride_hailing_manager.go
-└── tests/
-    └── trip_service_test.go    # Unit tests & race condition tests
+├── main.go                     # Interactive simulation demo & DI root
+└── internal/                   # Idiomatic Go internal package encapsulation
+    ├── models/                 # Core domain entities & enums
+    │   ├── enums.go
+    │   ├── location.go
+    │   ├── user.go
+    │   ├── vehicle.go
+    │   ├── trip.go
+    │   └── payment.go
+    ├── strategy/               # Strategy & Decorator Pattern implementations
+    │   ├── matching_strategy.go
+    │   ├── pricing_strategy.go
+    │   └── payment_strategy.go
+    ├── observer/               # Observer Pattern implementation
+    │   └── notification.go
+    ├── services/               # Core business service interfaces & implementations
+    │   ├── location_service.go
+    │   ├── user_service.go
+    │   ├── pricing_service.go
+    │   ├── matching_service.go
+    │   └── trip_service.go
+    └── manager/                # Facade Manager (Constructor Injection)
+        └── ride_hailing_manager.go
 ```
 
 ---
@@ -173,17 +244,6 @@ Execute `main.go` to observe end-to-end scenarios (rider booking, driver assignm
 
 ```bash
 go run main.go
-```
-
-### Running Unit Tests & Race Condition Checks
-Run standard test suite:
-```bash
-go test -v ./...
-```
-
-Run race detector to verify zero race conditions during concurrent driver bookings:
-```bash
-go test -race ./...
 ```
 
 ---
@@ -226,5 +286,6 @@ SCENARIO 1: Alice Books a Sedan (Nearest Driver Strategy)
 ## 💡 Design Highlights & Trade-offs
 
 - **Extensibility**: Adding a new pricing strategy (e.g., `DiscountPricingStrategy` or `UberPool`) or matching strategy (e.g., `ETA-based Matching`) requires zero changes to core trip service logic—simply implement the interface.
+- **Dependency Inversion**: Services and managers depend on interfaces, instantiated and injected in `main.go`.
 - **Encapsulation**: Using `internal/` ensures internal data models and services cannot be imported by external Go modules.
-- **Thread Safety**: High concurrency handling during driver assignment prevents double-booking race conditions.
+- **Thread Safety & Double-Booking Prevention**: High concurrency handling during driver assignment prevents race conditions. Uses an atomic `TryAssignToTrip()` method on `Driver` under `sync.RWMutex` to combine availability checking and status mutation into a single atomic step, eliminating TOCTOU double-booking bugs.

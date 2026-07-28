@@ -5,18 +5,23 @@ import (
 	"uber_ride_hailing_lld/internal/strategy"
 )
 
-type MatchingService struct {
+type MatchingService interface {
+	SetStrategy(newStrategy strategy.MatchingStrategy)
+	FindDriver(pickup models.Location, vehicleType models.VehicleType, availableDrivers []*models.Driver) *models.Driver
+}
+
+type matchingService struct {
 	strategy strategy.MatchingStrategy
 }
 
-func NewMatchingService(s strategy.MatchingStrategy) *MatchingService {
-	return &MatchingService{strategy: s}
+func NewMatchingService(s strategy.MatchingStrategy) MatchingService {
+	return &matchingService{strategy: s}
 }
 
-func (s *MatchingService) SetStrategy(newStrategy strategy.MatchingStrategy) {
+func (s *matchingService) SetStrategy(newStrategy strategy.MatchingStrategy) {
 	s.strategy = newStrategy
 }
 
-func (s *MatchingService) FindDriver(pickup models.Location, vehicleType models.VehicleType, availableDrivers []*models.Driver) *models.Driver {
+func (s *matchingService) FindDriver(pickup models.Location, vehicleType models.VehicleType, availableDrivers []*models.Driver) *models.Driver {
 	return s.strategy.FindDriver(pickup, vehicleType, availableDrivers)
 }

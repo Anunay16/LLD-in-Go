@@ -5,6 +5,8 @@ import (
 
 	"uber_ride_hailing_lld/internal/manager"
 	"uber_ride_hailing_lld/internal/models"
+	"uber_ride_hailing_lld/internal/observer"
+	"uber_ride_hailing_lld/internal/services"
 	"uber_ride_hailing_lld/internal/strategy"
 )
 
@@ -14,8 +16,21 @@ func main() {
 	fmt.Println("==========================================================")
 	fmt.Println()
 
-	// 1. Initialize System Facade Manager
-	app := manager.NewRideHailingManager()
+	// 1. Initialize Services & Dependencies
+	userSvc := services.NewUserService()
+	locationSvc := services.NewLocationService()
+	matchingSvc := services.NewMatchingService(strategy.NewNearestDriverStrategy())
+	pricingSvc := services.NewPricingService(strategy.NewStandardPricingStrategy())
+	publisher := observer.NewNotificationPublisher()
+
+	// Register default notification listeners
+	publisher.RegisterObserver(observer.NewConsoleNotificationObserver("RIDER_APP"))
+	publisher.RegisterObserver(observer.NewConsoleNotificationObserver("DRIVER_APP"))
+
+	tripSvc := services.NewTripService(userSvc, matchingSvc, pricingSvc, locationSvc, publisher)
+
+	// Inject dependencies into System Facade Manager
+	app := manager.NewRideHailingManager(userSvc, matchingSvc, pricingSvc, locationSvc, tripSvc, publisher)
 
 	// 2. Register Riders
 	r1 := app.RegisterRider("R001", "Alice Smith", "+1-555-0101", models.NewLocation(12.9716, 77.5946)) // MG Road, Bengaluru

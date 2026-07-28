@@ -8,24 +8,31 @@ import (
 	"uber_ride_hailing_lld/internal/strategy"
 )
 
-type TripService struct {
+type TripService interface {
+	CreateTrip(tripID string, riderID string, pickup, dropoff models.Location, vType models.VehicleType) (*models.Trip, error)
+	StartTrip(tripID string) error
+	CompleteTrip(tripID string, paymentStrategy strategy.PaymentStrategy) (bool, string, error)
+	GetTrip(tripID string) (*models.Trip, error)
+}
+
+type tripService struct {
 	trips           map[string]*models.Trip
-	userService     *UserService
-	matchingService *MatchingService
-	pricingService  *PricingService
-	locationService *LocationService
-	publisher       *observer.NotificationPublisher
+	userService     UserService
+	matchingService MatchingService
+	pricingService  PricingService
+	locationService LocationService
+	publisher       observer.Subject
 	mu              sync.RWMutex
 }
 
 func NewTripService(
-	userService *UserService,
-	matchingService *MatchingService,
-	pricingService *PricingService,
-	locationService *LocationService,
-	publisher *observer.NotificationPublisher,
-) *TripService {
-	return &TripService{
+	userService UserService,
+	matchingService MatchingService,
+	pricingService PricingService,
+	locationService LocationService,
+	publisher observer.Subject,
+) TripService {
+	return &tripService{
 		trips:           make(map[string]*models.Trip),
 		userService:     userService,
 		matchingService: matchingService,
@@ -35,7 +42,7 @@ func NewTripService(
 	}
 }
 
-func (s *TripService) CreateTrip(tripID string, riderID string, pickup, dropoff models.Location, vType models.VehicleType) (*models.Trip, error) {
+func (s *tripService) CreateTrip(tripID string, riderID string, pickup, dropoff models.Location, vType models.VehicleType) (*models.Trip, error) {
 	rider, err := s.userService.GetRider(riderID)
 	if err != nil {
 		return nil, err
@@ -76,19 +83,18 @@ func (s *TripService) CreateTrip(tripID string, riderID string, pickup, dropoff 
 	return trip, nil
 }
 
-func (s *TripService) assignDriverSafely(trip *models.Trip, driver *models.Driver) bool {
-	// Mutex protection inside driver status change
-	if !driver.IsAvailable() {
+func (s *tripService) assignDriverSafely(trip *models.Trip, driver *models.Driver) bool {
+	// Atomic check-and-set to prevent TOCTOU race conditions when multiple trips match the same driver
+	if !driver.TryAssignToTrip() {
 		return false
 	}
 
-	driver.SetStatus(models.DriverStatusOnTrip)
 	trip.AssignDriver(driver)
 	s.publisher.NotifyObservers(trip, models.TripStatusAccepted)
 	return true
 }
 
-func (s *TripService) StartTrip(tripID string) error {
+func (s *tripService) StartTrip(tripID string) error {
 	s.mu.RLock()
 	trip, exists := s.trips[tripID]
 	s.mu.RUnlock()
@@ -106,7 +112,7 @@ func (s *TripService) StartTrip(tripID string) error {
 	return nil
 }
 
-func (s *TripService) CompleteTrip(tripID string, paymentStrategy strategy.PaymentStrategy) (bool, string, error) {
+func (s *tripService) CompleteTrip(tripID string, paymentStrategy strategy.PaymentStrategy) (bool, string, error) {
 	s.mu.RLock()
 	trip, exists := s.trips[tripID]
 	s.mu.RUnlock()
@@ -133,7 +139,7 @@ func (s *TripService) CompleteTrip(tripID string, paymentStrategy strategy.Payme
 	return success, msg, nil
 }
 
-func (s *TripService) GetTrip(tripID string) (*models.Trip, error) {
+func (s *tripService) GetTrip(tripID string) (*models.Trip, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

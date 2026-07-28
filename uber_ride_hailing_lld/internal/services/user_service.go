@@ -6,20 +6,28 @@ import (
 	"uber_ride_hailing_lld/internal/models"
 )
 
-type UserService struct {
+type UserService interface {
+	RegisterRider(id, name, phone string, initialLoc models.Location) *models.Rider
+	RegisterDriver(id, name, phone string, vehicle *models.Vehicle, initialLoc models.Location) *models.Driver
+	GetRider(id string) (*models.Rider, error)
+	GetDriver(id string) (*models.Driver, error)
+	GetAvailableDrivers() []*models.Driver
+}
+
+type userService struct {
 	riders  map[string]*models.Rider
 	drivers map[string]*models.Driver
 	mu      sync.RWMutex
 }
 
-func NewUserService() *UserService {
-	return &UserService{
+func NewUserService() UserService {
+	return &userService{
 		riders:  make(map[string]*models.Rider),
 		drivers: make(map[string]*models.Driver),
 	}
 }
 
-func (s *UserService) RegisterRider(id, name, phone string, initialLoc models.Location) *models.Rider {
+func (s *userService) RegisterRider(id, name, phone string, initialLoc models.Location) *models.Rider {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -28,7 +36,7 @@ func (s *UserService) RegisterRider(id, name, phone string, initialLoc models.Lo
 	return rider
 }
 
-func (s *UserService) RegisterDriver(id, name, phone string, vehicle *models.Vehicle, initialLoc models.Location) *models.Driver {
+func (s *userService) RegisterDriver(id, name, phone string, vehicle *models.Vehicle, initialLoc models.Location) *models.Driver {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -37,7 +45,7 @@ func (s *UserService) RegisterDriver(id, name, phone string, vehicle *models.Veh
 	return driver
 }
 
-func (s *UserService) GetRider(id string) (*models.Rider, error) {
+func (s *userService) GetRider(id string) (*models.Rider, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -48,7 +56,7 @@ func (s *UserService) GetRider(id string) (*models.Rider, error) {
 	return rider, nil
 }
 
-func (s *UserService) GetDriver(id string) (*models.Driver, error) {
+func (s *userService) GetDriver(id string) (*models.Driver, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -59,7 +67,7 @@ func (s *UserService) GetDriver(id string) (*models.Driver, error) {
 	return driver, nil
 }
 
-func (s *UserService) GetAvailableDrivers() []*models.Driver {
+func (s *userService) GetAvailableDrivers() []*models.Driver {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

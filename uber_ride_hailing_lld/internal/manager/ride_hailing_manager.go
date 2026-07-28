@@ -8,27 +8,22 @@ import (
 )
 
 type RideHailingManager struct {
-	UserService     *services.UserService
-	MatchingService *services.MatchingService
-	PricingService  *services.PricingService
-	LocationService *services.LocationService
-	TripService     *services.TripService
-	Publisher       *observer.NotificationPublisher
+	UserService     services.UserService
+	MatchingService services.MatchingService
+	PricingService  services.PricingService
+	LocationService services.LocationService
+	TripService     services.TripService
+	Publisher       observer.Subject
 }
 
-func NewRideHailingManager() *RideHailingManager {
-	userSvc := services.NewUserService()
-	locationSvc := services.NewLocationService()
-	matchingSvc := services.NewMatchingService(strategy.NewNearestDriverStrategy())
-	pricingSvc := services.NewPricingService(strategy.NewStandardPricingStrategy())
-	publisher := observer.NewNotificationPublisher()
-
-	// Register default notification listeners
-	publisher.RegisterObserver(observer.NewConsoleNotificationObserver("RIDER_APP"))
-	publisher.RegisterObserver(observer.NewConsoleNotificationObserver("DRIVER_APP"))
-
-	tripSvc := services.NewTripService(userSvc, matchingSvc, pricingSvc, locationSvc, publisher)
-
+func NewRideHailingManager(
+	userSvc services.UserService,
+	matchingSvc services.MatchingService,
+	pricingSvc services.PricingService,
+	locationSvc services.LocationService,
+	tripSvc services.TripService,
+	publisher observer.Subject,
+) *RideHailingManager {
 	return &RideHailingManager{
 		UserService:     userSvc,
 		MatchingService: matchingSvc,
