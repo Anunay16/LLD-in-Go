@@ -1,4 +1,4 @@
-module lockingsystem
+module booking_system
 
 go 1.26.1
 
