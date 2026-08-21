@@ -6,30 +6,32 @@ The **State Pattern** is a behavioral design pattern that allows an object to al
 
 ## 📌 Problem & Intent
 
-In software applications, objects often have different behaviors depending on their current state. For example, a Vending Machine behaves differently when it has coins inserted versus when it is empty.
+In software applications, objects often have different behaviors depending on their current state. For example, a Music Player's `Play`, `Pause`, and `Stop` buttons behave completely differently depending on whether music is currently playing, paused, or stopped.
 
 ### The Naive Approach
 Without the State pattern, stateful behavior is typically managed using large conditional statements (`if-else` or `switch` blocks):
 
 ```go
-func (v *VendingMachine) InsertCoin() {
-    if v.state == "NO_COIN" {
-        v.state = "HAS_COIN"
-    } else if v.state == "HAS_COIN" {
-        fmt.Println("Coin already inserted")
-    } else if v.state == "SOLD_OUT" {
-        fmt.Println("Machine is sold out")
+func (p *MusicPlayer) PressPlay() {
+    if p.state == "STOPPED" {
+        p.startPlayback()
+        p.state = "PLAYING"
+    } else if p.state == "PAUSED" {
+        p.resumePlayback()
+        p.state = "PLAYING"
+    } else if p.state == "PLAYING" {
+        fmt.Println("Already playing")
     }
 }
 ```
 
 ### Why Naive Approach Fails
-- **Violation of Open/Closed Principle**: Adding a new state requires editing existing methods everywhere.
+- **Violation of Open/Closed Principle**: Adding a new state (e.g., `Buffering`, `FastForwarding`) requires editing existing methods everywhere.
 - **Maintainability Nightmare**: Code grows bloated with repetitive state-checking logic.
 - **High Coupling**: State transition rules are scattered across massive conditional branches.
 
 ### The State Pattern Solution
-Encapsulate state-specific behaviors inside distinct state structs that implement a common interface. The context object (`VendingMachine`) delegates state-specific requests to its current state object.
+Encapsulate state-specific behaviors inside distinct state structs that implement a common interface. The context object (`MusicPlayer` / `VendingMachine`) delegates state-specific requests to its current state object.
 
 ---
 
@@ -39,26 +41,44 @@ Encapsulate state-specific behaviors inside distinct state structs that implemen
                   ┌──────────────────────┐
                   │    State (Interface) │
                   ├──────────────────────┤
-                  │ + InsertCoin()       │
-                  │ + EjectCoin()        │
-                  │ + SelectProduct()    │
-                  │ + Dispense()         │
+                  │ + Play()             │
+                  │ + Pause()            │
+                  │ + Stop()             │
+                  │ + NextTrack()        │
+                  │ + PreviousTrack()    │
                   └──────────▲───────────┘
                              │
      ┌───────────────────────┼───────────────────────┐
      │                       │                       │
 ┌────┴────────────┐  ┌───────┴──────────┐  ┌─────────┴─────────┐
-│  NoCoinState    │  │   HasCoinState   │  │ItemDispensedState │
+│  StoppedState   │  │   PlayingState   │  │    PausedState    │
 └─────────────────┘  └──────────────────┘  └───────────────────┘
 ```
 
-1. **Context (`VendingMachine`)**: Defines the interface of interest to clients. Maintains a reference to an instance of a Concrete State subclass that defines the current state.
-2. **State (`State` Interface)**: Defines an interface for encapsulating the behavior associated with a particular state of the Context.
-3. **Concrete States (`NoCoinState`, `HasCoinState`, `ItemDispensedState`, `SoldOutState`)**: Each struct implements a behavior associated with a state of the Context and manages transitions to other states.
+1. **Context (`MusicPlayer`)**: Maintains a reference to an instance of a Concrete State struct defining the current state.
+2. **State (`State` Interface)**: Declares operations common to all concrete states.
+3. **Concrete States (`StoppedState`, `PlayingState`, `PausedState`)**: Implement behaviors associated with a particular state of the Context.
 
 ---
 
-## 🔄 State Transition Diagram (Vending Machine)
+## 🔄 State Transition Diagrams
+
+### 🎵 Music Player State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> StoppedState
+
+    StoppedState --> PlayingState : Play()
+    PlayingState --> PausedState : Pause()
+    PausedState --> PlayingState : Play() (Resume)
+    
+    PlayingState --> StoppedState : Stop()
+    PausedState --> StoppedState : Stop()
+    StoppedState --> StoppedState : Stop()
+```
+
+### 🥤 Vending Machine State Machine
 
 ```mermaid
 stateDiagram-v2
@@ -71,92 +91,92 @@ stateDiagram-v2
     
     ItemDispensedState --> NoCoinState : Dispense() [Inventory > 0]
     ItemDispensedState --> SoldOutState : Dispense() [Inventory == 0]
-    
-    SoldOutState --> [*]
 ```
 
 ---
 
 ## 💡 Real-World Use Cases
 
-1. **Vending Machines / ATMs**: Handling coin insertion, PIN authentication, account selection, and cash dispensing based on machine status.
-2. **E-Commerce Order Lifecycle**:
+1. **Media / Audio Players**: Handling `Play`, `Pause`, `Stop`, and `Track Navigation` based on current playback state.
+2. **Vending Machines / ATMs**: Handling coin insertion, PIN authentication, product selection, and cash dispensing based on machine status.
+3. **E-Commerce Order Lifecycle**:
    - `OrderPending` $\rightarrow$ `OrderPaid` $\rightarrow$ `OrderShipped` $\rightarrow$ `OrderDelivered` / `OrderCancelled`.
-3. **TCP Connection Management**:
+4. **TCP Connection Management**:
    - Connections transitioning between `CLOSED`, `LISTEN`, `SYN_SENT`, `ESTABLISHED`, and `FIN_WAIT`.
-4. **Document Publishing Workflows**:
+5. **Workflow / Document Publishing**:
    - `Draft` $\rightarrow$ `UnderReview` $\rightarrow$ `Approved` $\rightarrow$ `Published`.
-5. **Media Player Controllers**:
-   - Action of the "Play/Pause" button changes depending on whether audio is `Playing`, `Paused`, or `Stopped`.
 
 ---
 
-## 💻 Go Implementation Example
+## 💻 Go Implementation Examples
 
-The example in this directory models a **Vending Machine State System**.
+This directory includes two complete implementations:
+1. **Music Player State System** (`music_player/`)
+2. **Vending Machine State System** (`vending_machine/`)
 
 ### Project Structure
 ```text
 state_pattern/
 ├── go.mod
 ├── main.go
+├── music_player/
+│   ├── player.go                  # Context & State Interface for Music Player
+│   ├── stopped_state.go           # Concrete State: Stopped
+│   ├── playing_state.go           # Concrete State: Playing
+│   └── paused_state.go            # Concrete State: Paused
 └── vending_machine/
-    ├── vending_machine.go         # Context & State Interface
-    ├── no_coin_state.go           # Concrete State: Idle / Waiting for Coin
+    ├── vending_machine.go         # Context & State Interface for Vending Machine
+    ├── no_coin_state.go           # Concrete State: Waiting for Coin
     ├── has_coin_state.go          # Concrete State: Coin Inserted
     ├── item_dispensed_state.go    # Concrete State: Product Dispensing
     └── sold_out_state.go          # Concrete State: Out of Stock
 ```
 
-### Code Overview
+### Music Player Code Highlights
 
-#### 1. State Interface (`vending_machine/vending_machine.go`)
+#### 1. State Interface & Context (`music_player/player.go`)
 ```go
-package vending_machine
+package music_player
 
 type State interface {
-	InsertCoin() error
-	EjectCoin() error
-	SelectProduct() error
-	Dispense() error
+	Play() error
+	Pause() error
+	Stop() error
+	NextTrack() error
+	PreviousTrack() error
+}
+
+type MusicPlayer struct {
+	stoppedState State
+	playingState State
+	pausedState  State
+
+	currentState      State
+	playlist          []string
+	currentTrackIndex int
 }
 ```
 
-#### 2. Concrete State Example (`vending_machine/has_coin_state.go`)
+#### 2. Playing State (`music_player/playing_state.go`)
 ```go
-package vending_machine
+package music_player
 
 import "fmt"
 
-type HasCoinState struct {
-	vendingMachine *VendingMachine
+type PlayingState struct {
+	player *MusicPlayer
 }
 
-func (s *HasCoinState) SelectProduct() error {
-	fmt.Println("--> Action: SelectProduct -> Product selected.")
-	s.vendingMachine.SetState(s.vendingMachine.GetItemDispensedState())
+func (s *PlayingState) Pause() error {
+	fmt.Printf("--> [PlayingState] Pausing playback of \"%s\"\n", s.player.GetCurrentTrack())
+	s.player.SetState(s.player.GetPausedState())
 	return nil
 }
-```
 
-#### 3. Context (`vending_machine/vending_machine.go`)
-```go
-type VendingMachine struct {
-	hasCoinState       State
-	noCoinState        State
-	itemDispensedState State
-	soldOutState       State
-
-	currentState State
-	itemCount    int
-}
-
-func (v *VendingMachine) SelectProduct() error {
-	err := v.currentState.SelectProduct()
-	if err != nil {
-		return err
-	}
-	return v.currentState.Dispense()
+func (s *PlayingState) Stop() error {
+	fmt.Println("--> [PlayingState] Stopping playback.")
+	s.player.SetState(s.player.GetStoppedState())
+	return nil
 }
 ```
 
@@ -170,37 +190,38 @@ Navigate to this directory and run:
 go run main.go
 ```
 
-### Sample Output
+### Sample Output (Music Player Demo)
 ```text
 ==========================================
-     State Pattern Demo: Vending Machine  
+     State Pattern Demo 2: Music Player   
 ==========================================
-Current state: *vending_machine.NoCoinState, Items remaining: 2
+State: *music_player.StoppedState | Current Track: "Bohemian Rhapsody - Queen"
 
-[Scenario 1] Normal Purchase:
---> Action: InsertCoin -> Coin inserted successfully.
---> Action: SelectProduct -> Product selected.
---> Action: Dispense -> Item dispensed. Enjoy!
-Current state: *vending_machine.NoCoinState, Items remaining: 1
+[Action] Press Play:
+--> [StoppedState] Starting playback of "Bohemian Rhapsody - Queen"
+State: *music_player.PlayingState | Current Track: "Bohemian Rhapsody - Queen"
 
-[Scenario 2] Insert Coin and Eject:
---> Action: InsertCoin -> Coin inserted successfully.
---> Action: EjectCoin -> Coin returned.
-Current state: *vending_machine.NoCoinState, Items remaining: 1
+[Action] Next Track:
+--> [PlayingState] Playing next track: "Hotel California - Eagles"
+State: *music_player.PlayingState | Current Track: "Hotel California - Eagles"
 
-[Scenario 3] Invalid Action (Selecting product without coin):
-ERROR: cannot select product: please insert a coin first
+[Action] Press Pause:
+--> [PlayingState] Pausing playback of "Hotel California - Eagles"
+State: *music_player.PausedState | Current Track: "Hotel California - Eagles"
 
-[Scenario 4] Purchase Final Item:
---> Action: InsertCoin -> Coin inserted successfully.
---> Action: SelectProduct -> Product selected.
---> Action: Dispense -> Item dispensed. Enjoy!
---> System Alert: Vending machine is now out of stock!
-Current state: *vending_machine.SoldOutState, Items remaining: 0
+[Action] Try Pausing Again:
+--> [PausedState] Player is already paused.
 
-[Scenario 5] Action on Sold-out Machine:
-ERROR: cannot insert coin: machine is out of stock
-ERROR: cannot select product: machine is out of stock
+[Action] Resume Playback:
+--> [PausedState] Resuming playback of "Hotel California - Eagles"
+State: *music_player.PlayingState | Current Track: "Hotel California - Eagles"
+
+[Action] Press Stop:
+--> [PlayingState] Stopping playback.
+State: *music_player.StoppedState | Current Track: "Hotel California - Eagles"
+
+[Action] Try Pausing While Stopped:
+ERROR: cannot pause: player is currently stopped
 ```
 
 ---
