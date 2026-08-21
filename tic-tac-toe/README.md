@@ -309,29 +309,16 @@ func (s *OrderOneWinningStrategy) Undo(board *models.Board, lastMove models.Move
 
 ---
 
-## 🧐 Architectural Trade-off Analysis
+## 🧐 Architectural Trade-off Analysis: Player Polymorphism
 
-### 1. Symbol Design (`type Symbol string` vs `rune` vs `struct`)
+### Question: *"Is it good design to store `BotStrategy` and `Difficulty` inside a generic `Player` struct?"*
 
-| Symbol Representation | Memory & Performance | Unicode / Emoji Support | Multi-Character Symbol Support | Verdict |
-| :--- | :--- | :--- | :--- | :--- |
-| **`rune` (int32)** | $\mathcal{O}(1)$ (4 bytes) | Single Unicode char | ❌ No (`"P1"` invalid) | Too restrictive if players want multi-char or complex emojis. |
-| **`string`** | Lightweight pointer | Full Emoji / Unicode | ✅ Yes (`"P1"`, `"Player1"`) | Flexible, but risks Primitive Obsession if un-wrapped. |
-| **`type Symbol string` (Domain Type)** *(Chosen)* | Lightweight & Type-Safe | Full Emoji / Unicode (`"❌"`, `"⭕"`) | ✅ Yes | **Best Go Idiomatic Choice**: Prevents primitive mixing, zero struct overhead, supports emojis & custom symbols. |
-
-- **When `struct Symbol` IS needed**: When a Symbol has visual metadata (`Color`, `IconURL`, `Metadata`).
-- **When `type Symbol string` IS preferred**: For CLI / Core Engine LLD, `type Symbol string` avoids over-engineering (YAGNI).
-
----
-
-### 2. Player Polymorphism (`HumanPlayer` & `BotPlayer` interface vs single struct)
-
-#### ❌ Problem with Single `Player` Concrete Struct:
+### ❌ Problem with Single `Player` Concrete Struct:
 If a single `Player` struct contains `BotDifficulty` and `BotStrategy`:
 1. **Single Responsibility Principle (SRP) Violation**: A `HumanPlayer` is forced to carry fields (`BotDifficulty`, `BotStrategy`) that are completely irrelevant for human players.
 2. **Nullability & Field Bloat**: `HumanPlayer` objects carry unused `nil` pointers.
 
-#### ✅ Recommended LLD Solution: Interface Polymorphism
+### ✅ Recommended LLD Solution: Interface Polymorphism
 
 ```go
 type Player interface {
