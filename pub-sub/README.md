@@ -203,10 +203,61 @@ func (cg *ConsumerGroup) consumePartition(ctx context.Context, topicName string,
 * **Where:** `broker.GetBroker()`
 * **Why:** The broker acts as the central coordinator. We only want one instance of the Broker to manage the state of all topics and partitions to avoid inconsistencies.
 
-### 6.3. Observer Pattern (Pub-Sub variant)
-* **Where:** `ConsumerGroup.consumePartition()` (polling loop)
-* **Why:** Consumers need to be notified of or retrieve new messages as they arrive in a partition.
-* **Implementation:** Kafka uses a "pull" model. The consumer continuously polls (`Read(offset)`) the partition. If a message is found, it "observes" it; otherwise, it yields/sleeps.
+### 6.3. Observer Pattern (Pub-Sub Variant)
+
+The Publish-Subscribe architecture in this project is an evolution of the classic **Gang of Four (GoF) Observer Pattern**, tailored for distributed message brokers like Apache Kafka.
+
+#### Mapping to Observer Pattern Concepts
+
+| GoF Observer Concept | Pub-Sub / System Equivalent | Description |
+| :--- | :--- | :--- |
+| **Subject (Observable)** | `core.Topic` / `core.Partition` | Maintains the state (immutable stream of `models.Message`s). It doesn't need direct knowledge of concrete consumer identities. |
+| **Observer (Subscriber)** | `client.ConsumerGroup` & Worker Goroutines | Entities interested in state changes (new messages) published to a specific topic. |
+| **Registration (`Attach`)** | `ConsumerGroup.Subscribe(ctx, topic, handler)` | Registers interest in a topic and attaches an event handler callback function `func(partition int, key, value []byte)`. |
+| **Update Notification** | `partition.Read(offset)` + `handler(...)` | Detection and dispatch of new messages to the observer's handler callback. |
+
+#### Pull-Based vs. Push-Based Observer Model
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant P as Producer
+    participant T as Topic / Partition (Subject)
+    participant CG as Consumer Worker (Observer)
+    participant H as Handler Callback
+
+    P->>T: Publish(msg) [Append to Partition]
+    Note over T: State updated: New message at Offset N
+
+    loop Polling Loop (consumePartition)
+        CG->>T: Read(currentOffset)
+        alt Message Found (Offset == currentOffset)
+            T-->>CG: Return *Message, true
+            CG->>H: Execute handler(partition, key, value)
+            Note over CG: Commit Offset: currentOffset++
+        else No New Message
+            T-->>CG: Return nil, false
+            Note over CG: Back off & sleep (10ms)
+        end
+    end
+```
+
+#### Key Characteristics of This Observer Implementation:
+
+1. **Pull-Based (Poll-Driven) Observation:**
+   * In a traditional GoF Observer, the Subject actively *pushes* updates by iterating through a list of observers and synchronously invoking `observer.Update()`.
+   * In this distributed design, consumers use a **pull model**: each consumer worker runs a continuous loop polling `partition.Read(currentOffset)`. This prevents fast producers from overwhelming slow observers (backpressure control) and allows observers to process at their own rate.
+
+2. **Decoupled 1-to-Many Event Distribution:**
+   * Multiple independent `ConsumerGroup` instances can observe the same `Topic`.
+   * Each consumer group tracks its own `offsets` map independently without mutating the underlying partition or affecting other observers.
+
+3. **Event Handler / Callback Dispatch:**
+   * When an observer worker detects a new message at its current offset, it notifies the client application by invoking the registered callback `handler(partIdx, msg.Key, msg.Value)`.
+
+4. **Partition-Level Concurrent Observers:**
+   * During `Subscribe()`, the `ConsumerGroup` launches a dedicated Goroutine per partition (`consumePartition`).
+   * This provides thread-safe, non-blocking parallel observation across different partitions while preserving strict sequential observation per partition.
 
 ### 6.4. Concurrency Patterns (Worker Pool / Goroutines)
 * **Where:** `ConsumerGroup.Subscribe()`
