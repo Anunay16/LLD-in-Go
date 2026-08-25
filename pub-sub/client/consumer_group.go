@@ -27,7 +27,7 @@ func NewConsumerGroup(id string, b core.Broker) *ConsumerGroup {
 }
 
 // Subscribe starts the consumer group workers for a given topic.
-func (cg *ConsumerGroup) Subscribe(ctx context.Context, topicName string, numWorkers int, handler func(partition int, key []byte, value []byte)) error {
+func (cg *ConsumerGroup) Subscribe(ctx context.Context, topicName string, handler func(partition int, key []byte, value []byte)) error {
 	topic, err := cg.broker.GetTopic(topicName)
 	if err != nil {
 		return err

@@ -36,7 +36,7 @@ func main() {
 
 	// 5. Start Consumer Group
 	fmt.Println("Starting Consumer Group...")
-	err = cg.Subscribe(ctx, topicName, 3, func(partition int, key []byte, value []byte) {
+	err = cg.Subscribe(ctx, topicName, func(partition int, key []byte, value []byte) {
 		fmt.Printf("[Consumer Group] Processed message from partition %d | Key: %s | Value: %s\n", partition, string(key), string(value))
 	})
 	if err != nil {
