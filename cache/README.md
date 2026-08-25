@@ -17,7 +17,7 @@ A clean, scalable, thread-safe In-Memory Cache designed for **SDE-2 low-level de
 ### Non-Functional Requirements
 - **Thread Safety**: Concurrent reads and writes are safe using Go mutexes (`sync.RWMutex`).
 - **O(1) Time Complexity**: `Get`, `Put`, `Delete`, and `Evict` operations run in $O(1)$ time.
-- **Extensibility**: Easily add new eviction policies (FIFO, TTL, ARC) without modifying existing cache logic.
+- **Extensibility**: Easily add new eviction policies (FIFO, TTL, ARC) or distributed synchronization without modifying existing cache logic.
 
 ---
 
@@ -122,8 +122,8 @@ classDiagram
 | **S - Single Responsibility** | `Storage` handles data storage; `Policy` handles eviction candidate tracking; `SimpleCache` coordinates thread safety, capacity checks, and delegating calls. |
 | **O - Open/Closed** | Open for extension (new policies like FIFO or TTL can be added), closed for modification (core cache logic remains untouched). |
 | **L - Liskov Substitution** | Any implementation of `Policy` (`LRUPolicy`, `LFUPolicy`) can replace each other without breaking `SimpleCache`. |
-| **I - Interface Segregation** | Small, focused, role-based interfaces (`Cache`, `Storage`, `Policy`). |
-| **D - Dependency Inversion** | `SimpleCache` depends on abstractions (`storage.Storage`, `eviction.Policy`), not concrete structs. |
+| **I - Interface Segregation** | Small, focused, role-based interfaces (`Cache`, `Storage`, `Policy`, `LockProvider`). |
+| **D - Dependency Inversion** | `SimpleCache` depends on abstractions (`storage.Storage`, `eviction.Policy`, `LockProvider`), not concrete structs. |
 
 ---
 
@@ -207,12 +207,146 @@ Current Cache Size: 3 / 3
 
 ---
 
-## 9. SDE-2 Interview Follow-up Topics
+## 9. Extending to Distributed Locking (`LockProvider`)
+
+In a **single-node in-memory cache**, synchronization is achieved using `sync.RWMutex`. 
+
+However, in a **distributed / multi-instance environment**, multiple application servers share or coordinate access to keys. A local mutex cannot synchronize across machines. To solve this without coupling the cache to a specific technology (e.g., Redis, etcd, ZooKeeper), we introduce the **`LockProvider` interface** following the **Dependency Inversion Principle (DIP)**.
+
+### A. `LockProvider` Interface Definition
+
+```go
+package lock
+
+import (
+	"context"
+	"time"
+)
+
+// Lock represents an acquired lock handle.
+type Lock interface {
+	// Release unlocks the resource.
+	Release(ctx context.Context) error
+}
+
+// LockProvider defines the strategy for acquiring distributed or local locks.
+type LockProvider interface {
+	// Acquire tries to acquire a lock for the given resource key within a TTL.
+	Acquire(ctx context.Context, key string, ttl time.Duration) (Lock, error)
+}
+```
+
+---
+
+### B. Pluggable Implementations
+
+```mermaid
+classDiagram
+    class LockProvider {
+        <<interface>>
+        +Acquire(ctx Context, key string, ttl Duration) (Lock, error)
+    }
+
+    class Lock {
+        <<interface>>
+        +Release(ctx Context) error
+    }
+
+    class LocalMutexLockProvider {
+        -mu sync.RWMutex
+        +Acquire(ctx Context, key string, ttl Duration) (Lock, error)
+    }
+
+    class RedisRedlockProvider {
+        -redisClient RedisClient
+        +Acquire(ctx Context, key string, ttl Duration) (Lock, error)
+    }
+
+    class EtcdLockProvider {
+        -concurrencySession Session
+        +Acquire(ctx Context, key string, ttl Duration) (Lock, error)
+    }
+
+    LockProvider <|.. LocalMutexLockProvider
+    LockProvider <|.. RedisRedlockProvider
+    LockProvider <|.. EtcdLockProvider
+```
+
+1. **`LocalMutexLockProvider`** (Single-Instance):
+   - Uses local `sync.RWMutex` or a striped mutex map for local in-process concurrency.
+2. **`RedisRedlockProvider`** (Distributed):
+   - Uses Redis `SET resource_key token NX PX <ttl>` and Lua scripts for atomic release.
+3. **`EtcdLockProvider` / `ZookeeperLockProvider`** (Distributed Consensus):
+   - Uses raft-based distributed leases and ephemeral nodes.
+
+---
+
+### C. Integrating `LockProvider` into `SimpleCache`
+
+Replace `sync.RWMutex` in `SimpleCache` with `lock.LockProvider`:
+
+```go
+type DistributedCache struct {
+	capacity     int
+	storage      storage.Storage
+	eviction     eviction.Policy
+	lockProvider lock.LockProvider // Injected interface
+	lockTTL      time.Duration
+}
+
+func NewDistributedCache(
+	capacity int,
+	policy eviction.Policy,
+	store storage.Storage,
+	lockProvider lock.LockProvider,
+	lockTTL time.Duration,
+) *DistributedCache {
+	return &DistributedCache{
+		capacity:     capacity,
+		storage:      store,
+		eviction:     policy,
+		lockProvider: lockProvider,
+		lockTTL:      lockTTL,
+	}
+}
+
+func (c *DistributedCache) Put(ctx context.Context, key string, value any) error {
+	// 1. Acquire distributed lock for this key
+	lock, err := c.lockProvider.Acquire(ctx, key, c.lockTTL)
+	if err != nil {
+		return fmt.Errorf("failed to acquire distributed lock for key %s: %w", key, err)
+	}
+	defer lock.Release(ctx)
+
+	// 2. Perform safe read-modify-write / eviction
+	if _, exists := c.storage.Get(key); exists {
+		c.storage.Set(key, value)
+		c.eviction.KeyAccessed(key)
+		return nil
+	}
+
+	if c.storage.Len() >= c.capacity && c.capacity > 0 {
+		if victim, err := c.eviction.Evict(); err == nil {
+			c.storage.Delete(victim)
+		}
+	}
+
+	c.storage.Set(key, value)
+	c.eviction.KeyAdded(key)
+	return nil
+}
+```
+
+---
+
+## 10. SDE-2 Interview Follow-up Topics
 
 If the interviewer asks for follow-ups, here are standard discussion points:
 1. **Lock Contention / Scaling**:
-   - Under heavy concurrency, a single mutex can become a bottleneck. We can introduce a **Sharded Cache** where keys are partitioned across $N$ shards using `hash(key) % N`, each with its own mutex.
+   - Under heavy concurrency on a single node, we can introduce a **Sharded Cache** where keys are partitioned across $N$ shards using `hash(key) % N`, each with its own mutex.
 2. **TTL (Time-To-Live) / Expiration**:
    - Add an expiration timestamp to entries. Use a min-heap or active background cleanup goroutine + passive cleanup on `Get()`.
 3. **Write-Through / Write-Back Persistence**:
    - Create a new `Storage` implementation that delegates to an external DB or disk.
+4. **Cache Stampede / Thundering Herd**:
+   - When a hot key expires, multiple concurrent requests might compute/query the DB simultaneously. `LockProvider` (mutex per key or singleflight pattern) prevents duplicate backend queries.
