@@ -1,106 +1,177 @@
 package elevator
 
-import (
-	"sort"
-	"sync"
-)
+import "sync"
 
-type elevatorQueue struct {
-	upQueue   []int // sorted ascending
-	downQueue []int // sorted descending
-	mu        sync.RWMutex
+// StopQueue manages the pending stops for an elevator using the LOOK/SCAN algorithm.
+type StopQueue struct {
+	destinations  map[int]bool // internal destination requests
+	upHallCalls   map[int]bool // external hall calls going UP
+	downHallCalls map[int]bool // external hall calls going DOWN
+	mu            sync.RWMutex
 }
 
-func newElevatorQueue() *elevatorQueue {
-	return &elevatorQueue{
-		upQueue:   make([]int, 0),
-		downQueue: make([]int, 0),
+func newStopQueue() *StopQueue {
+	return &StopQueue{
+		destinations:  make(map[int]bool),
+		upHallCalls:   make(map[int]bool),
+		downHallCalls: make(map[int]bool),
 	}
 }
 
-func (eq *elevatorQueue) addFloor(floor int, currentFloor int) {
-	eq.mu.Lock()
-	defer eq.mu.Unlock()
+// AddDestination adds an internal destination floor request.
+func (q *StopQueue) AddDestination(floor int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.destinations[floor] = true
+}
 
-	// check duplicates
-	if eq.exists(floor) {
-		return
-	}
-
-	if floor > currentFloor {
-		eq.upQueue = append(eq.upQueue, floor)
-		sort.Ints(eq.upQueue) // ascending
-	} else if floor < currentFloor {
-		eq.downQueue = append(eq.downQueue, floor)
-		sort.Sort(sort.Reverse(sort.IntSlice(eq.downQueue))) // descending
-	} else {
-		// same floor → can be treated as immediate stop
+// AddHallCall adds an external hall call request with direction.
+func (q *StopQueue) AddHallCall(floor int, dir Direction) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if dir == Up {
+		q.upHallCalls[floor] = true
+	} else if dir == Down {
+		q.downHallCalls[floor] = true
 	}
 }
 
-func (eq *elevatorQueue) removeFloor(floor int) {
-	eq.mu.Lock()
-	defer eq.mu.Unlock()
-
-	eq.upQueue = removeFromSlice(eq.upQueue, floor)
-	eq.downQueue = removeFromSlice(eq.downQueue, floor)
+// HasStops returns true if there are any pending stops.
+func (q *StopQueue) HasStops() bool {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	return len(q.destinations) > 0 || len(q.upHallCalls) > 0 || len(q.downHallCalls) > 0
 }
 
-func removeFromSlice(arr []int, target int) []int {
-	for i, v := range arr {
-		if v == target {
-			return append(arr[:i], arr[i+1:]...)
-		}
-	}
-	return arr
-}
-
-func (eq *elevatorQueue) exists(floor int) bool {
-	for _, f := range eq.upQueue {
-		if f == floor {
+// HasStopsAbove returns true if any requested stop is above the given floor.
+func (q *StopQueue) HasStopsAbove(floor int) bool {
+	for f := range q.destinations {
+		if f > floor {
 			return true
 		}
 	}
-	for _, f := range eq.downQueue {
-		if f == floor {
+	for f := range q.upHallCalls {
+		if f > floor {
+			return true
+		}
+	}
+	for f := range q.downHallCalls {
+		if f > floor {
 			return true
 		}
 	}
 	return false
 }
 
-func (eq *elevatorQueue) isEmpty() bool {
-	return len(eq.upQueue) == 0 && len(eq.downQueue) == 0
+// HasStopsBelow returns true if any requested stop is below the given floor.
+func (q *StopQueue) HasStopsBelow(floor int) bool {
+	for f := range q.destinations {
+		if f < floor {
+			return true
+		}
+	}
+	for f := range q.upHallCalls {
+		if f < floor {
+			return true
+		}
+	}
+	for f := range q.downHallCalls {
+		if f < floor {
+			return true
+		}
+	}
+	return false
 }
 
-func (eq *elevatorQueue) getNextFloor(direction Direction) (int, bool) {
-	eq.mu.RLock()
-	defer eq.mu.RUnlock()
+// ShouldStop checks whether the elevator should stop at the given floor given its current direction.
+func (q *StopQueue) ShouldStop(floor int, dir Direction) bool {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
 
-	switch direction {
+	// Internal destinations always stop
+	if q.destinations[floor] {
+		return true
+	}
+
+	switch dir {
 	case Up:
-		if len(eq.upQueue) > 0 {
-			return eq.upQueue[0], true
+		if q.upHallCalls[floor] {
+			return true
 		}
-		if len(eq.downQueue) > 0 {
-			return eq.downQueue[0], true
+		// If at top turnaround and a down call exists at this floor
+		if q.downHallCalls[floor] && !q.HasStopsAbove(floor) {
+			return true
 		}
 	case Down:
-		if len(eq.downQueue) > 0 {
-			return eq.downQueue[0], true
+		if q.downHallCalls[floor] {
+			return true
 		}
-		if len(eq.upQueue) > 0 {
-			return eq.upQueue[0], true
+		// If at bottom turnaround and an up call exists at this floor
+		if q.upHallCalls[floor] && !q.HasStopsBelow(floor) {
+			return true
 		}
 	case Idle:
-		// pick nearest (simple strategy)
-		if len(eq.upQueue) > 0 {
-			return eq.upQueue[0], true
-		}
-		if len(eq.downQueue) > 0 {
-			return eq.downQueue[0], true
+		if q.upHallCalls[floor] || q.downHallCalls[floor] {
+			return true
 		}
 	}
 
-	return 0, false
+	return false
+}
+
+// ClearStopsAt clears the stops served at the given floor.
+func (q *StopQueue) ClearStopsAt(floor int, dir Direction) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	delete(q.destinations, floor)
+
+	switch dir {
+	case Up:
+		delete(q.upHallCalls, floor)
+		if !q.HasStopsAbove(floor) {
+			delete(q.downHallCalls, floor)
+		}
+	case Down:
+		delete(q.downHallCalls, floor)
+		if !q.HasStopsBelow(floor) {
+			delete(q.upHallCalls, floor)
+		}
+	case Idle:
+		delete(q.upHallCalls, floor)
+		delete(q.downHallCalls, floor)
+	}
+}
+
+// DetermineNextDirection decides the direction the elevator should head in next.
+func (q *StopQueue) DetermineNextDirection(currentFloor int, currentDir Direction) Direction {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	switch currentDir {
+	case Up:
+		if q.HasStopsAbove(currentFloor) {
+			return Up
+		}
+		if q.HasStopsBelow(currentFloor) {
+			return Down
+		}
+		return Idle
+	case Down:
+		if q.HasStopsBelow(currentFloor) {
+			return Down
+		}
+		if q.HasStopsAbove(currentFloor) {
+			return Up
+		}
+		return Idle
+	default: // Idle
+		if q.HasStopsAbove(currentFloor) {
+			return Up
+		}
+		if q.HasStopsBelow(currentFloor) {
+			return Down
+		}
+		return Idle
+	}
 }
