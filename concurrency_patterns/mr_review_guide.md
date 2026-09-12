@@ -8,6 +8,9 @@ This document captures real-world Go merge request (MR) scenarios focusing on co
 1. [MR #1: Async Event Dispatcher / Worker Pool](#mr-1-async-event-dispatcher--worker-pool)
 2. [MR #2: Cache with Read-Through & Design Patterns](#mr-2-cache-with-read-through--design-patterns)
 3. [MR #3: Pub/Sub Broker with Graceful Shutdown](#mr-3-pubsub-broker-with-graceful-shutdown)
+4. [MR #4: Batch File Processor Pipeline](#mr-4-batch-file-processor-pipeline)
+5. [MR #5: Distributed Rate Limiter & Token Bucket](#mr-5-distributed-rate-limiter--token-bucket)
+6. [MR #6: Event Listener & Notifier Registry](#mr-6-event-listener--notifier-registry)
 
 ---
 
@@ -536,5 +539,598 @@ func (b *Broker) Close() {
 		close(ch)
 	}
 	b.subscribers = nil
+}
+```
+
+
+---
+
+## MR #4: Batch File Processor Pipeline
+
+### 1. MR Description
+> *"We process large files in stages using a pipeline pattern: `Reader -> Transformer -> Uploader`. This MR implements the pipeline with cancellation support so that if any stage errors out, all stages terminate immediately without leaking goroutines."*
+
+### 2. The Code (Under Review)
+```go
+package pipeline
+
+import (
+	"context"
+	"fmt"
+	"sync"
+)
+
+type Item struct {
+	ID   int
+	Data string
+}
+
+// RunPipeline runs the 3-stage pipeline concurrently
+func RunPipeline(ctx context.Context, totalItems int) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	readCh := make(chan Item)
+	transformCh := make(chan Item)
+	errCh := make(chan error, 1)
+
+	var wg sync.WaitGroup
+
+	// Stage 1: Producer / Reader
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(readCh)
+		for i := 0; i < totalItems; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			case readCh <- Item{ID: i, Data: fmt.Sprintf("raw-%d", i)}:
+			}
+		}
+	}()
+
+	// Stage 2: Transformer
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(transformCh)
+		for item := range readCh {
+			if item.ID == 13 { // Simulated error condition
+				select {
+				case errCh <- fmt.Errorf("bad item id %d", item.ID):
+				default:
+				}
+				cancel()
+				return
+			}
+			transformCh <- Item{ID: item.ID, Data: item.Data + "-transformed"}
+		}
+	}()
+
+	// Stage 3: Uploader (Consumer)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for item := range transformCh {
+			_ = item // simulated upload
+		}
+	}()
+
+	wg.Wait()
+
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
+}
+```
+
+### 3. Why It Is Bad (Flaws & Failure Modes)
+1. **Unprotected Downstream Send (`transformCh <- ...`) Causes Goroutine Leak / Deadlock:**
+   - In Stage 2, `transformCh <- Item{...}` is an unbuffered blocking send not wrapped in a `select` with `case <-ctx.Done()`.
+   - If downstream (Stage 3) terminates early or stops reading, Stage 2 blocks forever on sending. It will never read the next item and will never respond to context cancellation.
+2. **Reading with `for item := range readCh` Ignores Cancellation When Idle:**
+   - In Stage 2, `for item := range readCh` only checks for channel close or new items. If Stage 1 pauses or is slow, Stage 2 blocks indefinitely on receiving without reacting to `<-ctx.Done()`.
+3. **Exit Race Condition (Stage 1 Leaks):**
+   - When Stage 2 exits on error (`item.ID == 13`), it terminates and no longer reads `readCh`.
+   - If Stage 1 is already blocked attempting to send on `readCh`, it will never unblock. Because Go select is pseudo-random when multiple cases are ready, if Stage 1 is blocked waiting for a reader, it will hang.
+   - Stage 1 never calls `wg.Done()`, causing `wg.Wait()` to deadlock the entire program.
+4. **Stage 3 Consumer Does Not Check Context:**
+   - Stage 3 continues draining and executing work even after context is cancelled.
+5. **Manual Synchronization Boilerplate:**
+   - Coordinating `sync.WaitGroup`, `errCh`, and manual `cancel()` calls is error-prone and easily replaced by standard Go tooling.
+
+### 4. Ideal Review Comments to Leave on the MR
+- **On Stage 2 `transformCh <- Item{...}`:**
+  > *"This send is not guarded by context cancellation. If Stage 3 exits or halts, Stage 2 will block indefinitely here, causing a goroutine leak. Every channel send in a pipeline must be wrapped in a `select` with `case <-ctx.Done(): return ctx.Err()`."*
+- **On Stage 2 `for item := range readCh`:**
+  > *"Using `for item := range readCh` prevents Stage 2 from reacting to context cancellation while waiting for new items. Use an explicit `select` between `case <-ctx.Done():` and `case item, ok := <-readCh:`."*
+- **On Stage 3 Execution:**
+  > *"Stage 3 does not check `ctx.Done()`. If upstream stages cancel or error out, Stage 3 should immediately abort processing pending items."*
+- **Design Recommendation (`errgroup`):**
+  > *"We are manually coordinating `sync.WaitGroup`, `errCh`, and manual cancellation. Consider adopting `golang.org/x/sync/errgroup` (`errgroup.WithContext`). It handles goroutine lifecycle, automatically cancels the shared context on the first non-nil error, and captures that error cleanly."*
+
+### 5. Recommended Solution
+```go
+package pipeline
+
+import (
+	"context"
+	"fmt"
+
+	"golang.org/x/sync/errgroup"
+)
+
+type Item struct {
+	ID   int
+	Data string
+}
+
+func RunPipeline(ctx context.Context, totalItems int) error {
+	// errgroup creates a context that cancels as soon as any stage returns an error
+	g, ctx := errgroup.WithContext(ctx)
+
+	readCh := make(chan Item)
+	transformCh := make(chan Item)
+
+	// Stage 1: Reader / Producer
+	g.Go(func() error {
+		defer close(readCh)
+		for i := 0; i < totalItems; i++ {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case readCh <- Item{ID: i, Data: fmt.Sprintf("raw-%d", i)}:
+			}
+		}
+		return nil
+	})
+
+	// Stage 2: Transformer
+	g.Go(func() error {
+		defer close(transformCh)
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case item, ok := <-readCh:
+				if !ok {
+					return nil
+				}
+				if item.ID == 13 {
+					return fmt.Errorf("bad item id %d", item.ID)
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case transformCh <- Item{ID: item.ID, Data: item.Data + "-transformed"}:
+				}
+			}
+		}
+	})
+
+	// Stage 3: Uploader / Consumer
+	g.Go(func() error {
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case item, ok := <-transformCh:
+				if !ok {
+					return nil
+				}
+				if err := uploadItem(ctx, item); err != nil {
+					return fmt.Errorf("upload failed for item %d: %w", item.ID, err)
+				}
+			}
+		}
+	})
+
+	// g.Wait() blocks until all stages finish and returns the first non-nil error
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("pipeline error: %w", err)
+	}
+
+	return nil
+}
+
+func uploadItem(ctx context.Context, item Item) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+```
+
+
+---
+
+## MR #5: Distributed Rate Limiter & Token Bucket
+
+### 1. MR Description
+> *"This MR implements a Token Bucket rate limiter designed to limit concurrent API calls to an external third-party service (e.g., GitLab REST API / GitHub API). Callers call `Wait()` to block until a token is available or until context expires. We use a ticker goroutine to replenish tokens into a channel."*
+
+### 2. The Code (Under Review)
+```go
+package ratelimit
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"time"
+)
+
+var ErrLimitExceeded = errors.New("rate limit exceeded or canceled")
+
+type TokenBucket struct {
+	tokens   chan struct{}
+	capacity int
+	rate     time.Duration // interval between tokens
+	mu       sync.Mutex
+	stopCh   chan struct{}
+}
+
+func NewTokenBucket(capacity int, refillInterval time.Duration) *TokenBucket {
+	tb := &TokenBucket{
+		tokens:   make(chan struct{}, capacity),
+		capacity: capacity,
+		rate:     refillInterval,
+		stopCh:   make(chan struct{}),
+	}
+
+	// Fill bucket initially
+	for i := 0; i < capacity; i++ {
+		tb.tokens <- struct{}{}
+	}
+
+	// Refill goroutine
+	go tb.startRefill()
+
+	return tb
+}
+
+func (tb *TokenBucket) startRefill() {
+	ticker := time.NewTicker(tb.rate)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-tb.stopCh:
+			return
+		case <-ticker.C:
+			// Add token to bucket if not full
+			select {
+			case tb.tokens <- struct{}{}:
+			default:
+				// Bucket is full, drop token
+			}
+		}
+	}
+}
+
+// Wait blocks until a token is available or context is cancelled.
+func (tb *TokenBucket) Wait(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-tb.tokens:
+		return nil
+	case <-tb.stopCh:
+		return ErrLimitExceeded
+	}
+}
+
+// Close stops the refill worker and cleans up resources.
+func (tb *TokenBucket) Close() {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
+	close(tb.stopCh)
+	close(tb.tokens)
+}
+```
+
+### 3. Why It Is Bad (Flaws & Failure Modes)
+1. **Closing `tokens` Causes `Wait()` to Bypass Rate Limits (The Fatal Trap):**
+   - In Go, reading from a closed channel does not block; it immediately yields the zero value (`struct{}{}`).
+   - In `Wait(ctx)`, both `case <-tb.tokens:` and `case <-tb.stopCh:` become ready upon `Close()`. Go selects randomly. If `case <-tb.tokens:` is picked, it returns `nil` (SUCCESS).
+   - After shutdown, callers of `Wait()` bypass rate limits entirely at infinite speed instead of being rejected.
+2. **Panic on Sending to Closed Channel in `startRefill()`:**
+   - When `Close()` runs `close(tb.tokens)`, a concurrent tick in `startRefill()` executing `tb.tokens <- struct{}{}` triggers an immediate panic: `send on closed channel`.
+3. **Double Close Panic & Useless Mutex:**
+   - Calling `Close()` twice panics on `close(tb.stopCh)`. `tb.mu` does not track closure state. Use `sync.Once`.
+4. **Ticker Panics on Non-Positive Durations:**
+   - If `capacity <= 0` or `refillInterval <= 0`, `time.NewTicker` panics at runtime. Input validation is missing.
+5. **Architectural Overhead (Active Ticker vs Lazy Calculation):**
+   - Running a background goroutine and OS ticker per limiter does not scale when managing thousands of rate limiters (e.g. per-tenant/per-repo limiters). High rates (e.g. 10k RPS) exceed ticker granularity.
+
+### 4. Ideal Review Comments to Leave on the MR
+- **On `Close()` and `Wait()` Semantics:**
+  > *"Closing `tb.tokens` causes `case <-tb.tokens:` in `Wait()` to immediately yield zero-value structs. Callers calling `Wait()` after `Close()` will receive `nil` (success) at infinite speed instead of an error, completely bypassing the rate limit. Do not close `tb.tokens`; signal termination solely via `stopCh`."*
+- **On Panic in `startRefill()`:**
+  > *"Closing `tb.tokens` creates a race condition with `startRefill()`. If `ticker.C` fires concurrently with `Close()`, `tb.tokens <- struct{}{}` will panic with `send on closed channel`."*
+- **On `Close()` Idempotency & `tb.mu`:**
+  > *"Calling `Close()` twice will panic on closing already-closed channels. `tb.mu` does not guard against this. Use `sync.Once` to ensure `Close()` is safe to call concurrently and repeatedly."*
+- **On Scale / Architecture Recommendation:**
+  > *"Active ticker goroutines introduce scheduler and timer overhead for large numbers of limiters. In production, consider a lazy token calculation based on elapsed time (`time.Now().Sub(lastRefill)`) as implemented in `golang.org/x/time/rate`."*
+
+### 5. Recommended Solution
+```go
+package ratelimit
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"time"
+)
+
+var (
+	ErrClosed        = errors.New("rate limiter is closed")
+	ErrInvalidParams = errors.New("capacity and refillInterval must be greater than zero")
+)
+
+type TokenBucket struct {
+	tokens chan struct{}
+	stopCh chan struct{}
+	once   sync.Once
+}
+
+func NewTokenBucket(capacity int, refillInterval time.Duration) (*TokenBucket, error) {
+	if capacity <= 0 || refillInterval <= 0 {
+		return nil, ErrInvalidParams
+	}
+
+	tb := &TokenBucket{
+		tokens: make(chan struct{}, capacity),
+		stopCh: make(chan struct{}),
+	}
+
+	// Fill bucket initially
+	for i := 0; i < capacity; i++ {
+		tb.tokens <- struct{}{}
+	}
+
+	// Refill goroutine
+	go tb.startRefill(refillInterval)
+
+	return tb, nil
+}
+
+func (tb *TokenBucket) startRefill(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-tb.stopCh:
+			return
+		case <-ticker.C:
+			select {
+			case tb.tokens <- struct{}{}:
+			default:
+				// Bucket is full, drop token
+			}
+		}
+	}
+}
+
+// Wait blocks until a token is acquired, context is canceled, or limiter is closed.
+func (tb *TokenBucket) Wait(ctx context.Context) error {
+	select {
+	case <-tb.stopCh:
+		return ErrClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-tb.tokens:
+		return nil
+	}
+}
+
+// Close gracefully stops the refill goroutine. It is safe to call multiple times.
+func (tb *TokenBucket) Close() {
+	tb.once.Do(func() {
+		close(tb.stopCh)
+	})
+}
+```
+
+
+---
+
+## MR #6: Event Listener & Notifier Registry
+
+### 1. MR Description
+> *"We implement an Event Notifier system where different service components can register event listeners. When an event occurs (e.g. `UserCreated`), the notifier dispatches the event concurrently to all registered listeners. We also support unregistering listeners."*
+
+### 2. The Code (Under Review)
+```go
+package notifier
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+)
+
+type Event struct {
+	Type      string
+	Payload   string
+	Timestamp time.Time
+}
+
+type Listener interface {
+	OnEvent(ctx context.Context, event *Event) error
+}
+
+type Notifier struct {
+	mu        sync.Mutex
+	listeners []Listener
+}
+
+func NewNotifier() *Notifier {
+	return &Notifier{
+		listeners: make([]Listener, 0),
+	}
+}
+
+func (n *Notifier) Register(l Listener) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.listeners = append(n.listeners, l)
+}
+
+func (n *Notifier) Unregister(l Listener) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	for i, listener := range n.listeners {
+		if listener == l {
+			n.listeners = append(n.listeners[:i], n.listeners[i+1:]...)
+			break
+		}
+	}
+}
+
+// Dispatch sends the event to all listeners concurrently with a timeout.
+func (n *Notifier) Dispatch(event Event) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	n.mu.Lock()
+	listeners := n.listeners
+	n.mu.Unlock()
+
+	var wg sync.WaitGroup
+
+	for _, l := range listeners {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := l.OnEvent(ctx, &event)
+			if err != nil {
+				fmt.Printf("listener error: %v
+", err)
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+```
+
+### 3. Why It Is Bad (Flaws & Failure Modes)
+1. **Loop Variable Capture (`l`) in Goroutine Closure:**
+   - In Go (especially pre-1.22 semantics), `l` is allocated once and reused across loop iterations.
+   - When goroutines start, `l` frequently evaluates to the last element in the slice. The same listener gets called $N$ times while earlier listeners are never called.
+2. **Shallow Slice Copy Race (`listeners := n.listeners`):**
+   - In Go, assigning a slice copies only the 24-byte header (pointer, len, cap). The underlying array is shared.
+   - If `Unregister()` executes concurrently, it mutates the underlying array via `append()`. Reading and modifying the same slice array concurrently without locks is a data race.
+3. **Cross-Goroutine Data Race via Pointer (`&event`):**
+   - Passing a shared pointer `&event` across multiple concurrent goroutines means any listener modifying the event causes a data race or unpredictable state for other listeners.
+4. **Memory Leak in `Unregister`:**
+   - Deleting an element from a slice of interfaces or pointers using `append(s[:i], s[i+1:]...)` leaves the last element in the underlying array alive. The garbage collector cannot free the unregistered listener object.
+5. **Context Decoupling (`context.Background()`):**
+   - Hardcoding `context.Background()` severs caller context cancellation, deadlines, and distributed tracing spans.
+
+### 4. Ideal Review Comments to Leave on the MR
+- **On Closure Variable Capture:**
+  > *"The loop variable `l` is captured by reference in the goroutine closure. Pass `l` explicitly into the anonymous function (`go func(target Listener) { ... }(l)`) to prevent all workers invoking the same captured instance."*
+- **On Shallow Slice Copy Race:**
+  > *"Doing `listeners := n.listeners` copies the slice header, but both slices still reference the exact same backing array. If `Unregister()` modifies the slice while `Dispatch()` is reading, this triggers a data race. Create a separate snapshot using `make([]Listener, len(n.listeners))` and `copy()` under lock."*
+- **On Pointer Passing `&event`:**
+  > *"Passing the same pointer `&event` to multiple concurrent listeners allows one listener to mutate the event data while others are reading it, causing a data race. Pass events by value or create per-goroutine copies."*
+- **On Memory Leak in `Unregister`:**
+  > *"When deleting from `n.listeners`, the shifted final element still holds an interface reference in the underlying backing array, preventing garbage collection. Set `n.listeners[last] = nil` before re-slicing."*
+- **On Context Propagation:**
+  > *"Avoid hardcoding `context.Background()` in internal methods. Accept `ctx context.Context` from the caller so that request cancellations and distributed tracing span contexts propagate properly."*
+
+### 5. Recommended Solution
+```go
+package notifier
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+)
+
+type Event struct {
+	Type      string
+	Payload   string
+	Timestamp time.Time
+}
+
+type Listener interface {
+	OnEvent(ctx context.Context, event Event) error
+}
+
+type Notifier struct {
+	mu        sync.RWMutex
+	listeners []Listener
+}
+
+func NewNotifier() *Notifier {
+	return &Notifier{
+		listeners: make([]Listener, 0),
+	}
+}
+
+func (n *Notifier) Register(l Listener) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.listeners = append(n.listeners, l)
+}
+
+func (n *Notifier) Unregister(l Listener) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	for i, listener := range n.listeners {
+		if listener == l {
+			last := len(n.listeners) - 1
+			copy(n.listeners[i:], n.listeners[i+1:])
+			n.listeners[last] = nil // Clear reference so GC can reclaim memory
+			n.listeners = n.listeners[:last]
+			break
+		}
+	}
+}
+
+// Dispatch sends events to all listeners concurrently, deriving timeout from caller context.
+func (n *Notifier) Dispatch(ctx context.Context, event Event) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	// Snapshot listeners to avoid holding lock and prevent data race on slice backing array
+	n.mu.RLock()
+	listeners := make([]Listener, len(n.listeners))
+	copy(listeners, n.listeners)
+	n.mu.RUnlock()
+
+	var wg sync.WaitGroup
+
+	for _, l := range listeners {
+		wg.Add(1)
+		// Explicitly pass listener as argument to avoid closure variable capture issues
+		go func(target Listener) {
+			defer wg.Done()
+			// Pass event by value to prevent cross-goroutine mutation races
+			if err := target.OnEvent(ctx, event); err != nil {
+				fmt.Printf("listener error: %v
+", err)
+			}
+		}(l)
+	}
+
+	wg.Wait()
 }
 ```
